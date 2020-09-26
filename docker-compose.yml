@@ -1,0 +1,106 @@
+version: '3.6'
+services:
+  
+  db:
+    image: mariadb
+    command: --transaction-isolation=READ-COMMITTED --binlog-format=ROW
+    restart: always
+    volumes:
+      - db-data:/var/lib/mysql
+    environment:
+      # Root password for root db user, keep safe!
+      - MYSQL_ROOT_PASSWORD=passwd
+      # credentials for user and database name
+      - MYSQL_PASSWORD=passwd
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "--silent"]
+  
+  redis:
+    image: redis:alpine
+    restart: always
+    # replace redis_passwd with a password for the redis service
+    command: redis-server --requirepass redis_passwd
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+     
+  app:
+    #image: registry.gitlab.com/mivao/infra/nextcloud:19.0.3.0
+    build:
+      context: .
+      args:
+        - BASE_VERSION=${NC_VERSION:?NC_VERSION not set}-apache
+    image: nextcloud-extended:${NC_VERSION:?NC_VERSION not set}
+    restart: always
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nextcloud/app:/var/www/html
+      - ./nextcloud/data:/var/www/html/data
+      - ./nextcloud/config:/var/www/html/config
+    environment:
+      # Initial Credentials for nextcloud admin user that will be auto-created for a fresh instance
+      - NEXTCLOUD_ADMIN_USER=admin
+      - NEXTCLOUD_ADMIN_PASSWORD=admin
+      # Space-separated domains your cloud will be served on
+      # Nextcloud wont accept calls with different hostnames
+      # Leave out if not needed, e.g. in testing environment
+      # NEXTCLOUD_TRUSTED_DOMAINS=mycloud.domain.de secondaddress.domain.com
+
+      # Docker-internal hostname of database and redis
+      - MYSQL_HOST=db
+      - REDIS_HOST=redis
+
+      # Password as set for the redis service
+      - REDIS_HOST_PASSWORD=redis_passwd
+
+      # User credentials and database as set for mysql service
+      - MYSQL_PASSWORD=passwd
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+
+      # Configuration for SMTP mail server for sending out mails from nextcloud
+      - SMTP_HOST=mail.example.com
+      - SMTP_SECURE=true
+      - SMTP_PORT=587
+      - SMTP_NAME=mailboxuser
+      - SMTP_PASSWORD=mailboxpass
+      - MAIL_FROM_ADDRESS=from@example.com
+      - MAIL_DOMAIN=example.com
+    depends_on:
+      - db
+      - redis
+      - elasticsearch
+
+  elasticsearch:
+    build:
+      context: ./elasticsearch
+      args:
+        - BASE_VERSION=${ES_VERSION:?NC_VERSION not set}
+    #image: autark.registry.jetbrains.space/nextcloud/nc-elasticsearch:7.7.0
+    image: elasticsearch-for-nextcloud:${ES_VERSION:?NC_VERSION not set}
+    restart: always
+    volumes:
+      - lucene-data:/usr/share/elasticsearch/data
+    environment:
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "discovery.type=single-node"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+        test: ["CMD-SHELL", "curl --silent --fail localhost:9200/_cluster/health || exit 1"]
+        interval: 30s
+        timeout: 30s
+        retries: 3
+
+volumes:
+  db-data:
+    driver: local
+  lucene-data:
+    driver: local
